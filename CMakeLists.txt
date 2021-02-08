@@ -14,6 +14,9 @@ add_subdirectory(libcuckoo)
 # Add C interface target
 add_subdirectory(libcuckoo-c)
 
+add_executable(main multithreading.cpp)
+target_link_libraries(main libcuckoo)
+
 # Build examples
 if(BUILD_EXAMPLES)
   add_subdirectory(examples)
