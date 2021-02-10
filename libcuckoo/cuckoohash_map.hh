@@ -147,6 +147,10 @@ public:
    */
   cuckoohash_map(const cuckoohash_map &other) = default;
 
+  cuckoohash_map(const Allocator& alloc, const Hash &hf = Hash(),
+                 const KeyEqual &equal = KeyEqual())
+      : cuckoohash_map(DEFAULT_SIZE, hf, equal, alloc) {}
+
   /**
    * Copy constructor with separate allocator. If @p other is being modified
    * concurrently, behavior is unspecified.
@@ -1883,7 +1887,7 @@ private:
     // array. Then the old buckets will be deleted when new_map is deleted.
     maybe_resize_locks(new_map.bucket_count());
     buckets_.swap(new_map.buckets_);
-    
+
     return ok;
   }
 
