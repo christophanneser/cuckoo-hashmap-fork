@@ -37,14 +37,16 @@ static uint64_t Timing(std::function<void()> fn) {
 int main() {
   vector<uint64_t> times;
 
-  for (auto threads : {1, 2, 4, 8, 16, 32}) {
+  for (auto threads : {16, 32}) { // 1, 2, 4, 8,
     libcuckoo::cuckoohash_map<uint64_t, uint64_t> map;
     times.emplace_back(
         Timing([&]() { RunBenchmark(threads, map, 100'000'000); }));
     auto locked_table = map.lock_table();
     assert(locked_table.size() == 10'000'000);
-    for (auto it = locked_table.begin(); it != locked_table.end(); it++)
-      assert(it.second == 10);
+    for (auto it = locked_table.begin(); it != locked_table.end(); it++) {
+      if (it->second != 10)
+        std::cerr << "wrong!" << std::endl;
+    }
   }
 
   for (auto time : times)
