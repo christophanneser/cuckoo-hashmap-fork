@@ -24,9 +24,9 @@
 #include <utility>
 #include <vector>
 
+#include "bucket_container.hh"
 #include "cuckoohash_config.hh"
 #include "cuckoohash_util.hh"
-#include "bucket_container.hh"
 
 namespace libcuckoo {
 
@@ -104,14 +104,11 @@ public:
   cuckoohash_map(size_type n = DEFAULT_SIZE, const Hash &hf = Hash(),
                  const KeyEqual &equal = KeyEqual(),
                  const Allocator &alloc = Allocator())
-      : hash_fn_(hf), eq_fn_(equal),
-        buckets_(reserve_calc(n), alloc),
-        old_buckets_(0, alloc),
-        all_locks_(get_allocator()),
+      : hash_fn_(hf), eq_fn_(equal), buckets_(reserve_calc(n), alloc),
+        old_buckets_(0, alloc), all_locks_(get_allocator()),
         num_remaining_lazy_rehash_locks_(0),
         minimum_load_factor_(DEFAULT_MINIMUM_LOAD_FACTOR),
-        maximum_hashpower_(NO_MAXIMUM_HASHPOWER),
-        max_num_worker_threads_(0) {
+        maximum_hashpower_(NO_MAXIMUM_HASHPOWER), max_num_worker_threads_(0) {
     all_locks_.emplace_back(std::min(bucket_count(), size_type(kMaxNumLocks)),
                             spinlock(), get_allocator());
   }
@@ -129,9 +126,8 @@ public:
    * @param alloc allocator instance to use
    */
   template <typename InputIt>
-  cuckoohash_map(InputIt first, InputIt last,
-                 size_type n = DEFAULT_SIZE, const Hash &hf = Hash(),
-                 const KeyEqual &equal = KeyEqual(),
+  cuckoohash_map(InputIt first, InputIt last, size_type n = DEFAULT_SIZE,
+                 const Hash &hf = Hash(), const KeyEqual &equal = KeyEqual(),
                  const Allocator &alloc = Allocator())
       : cuckoohash_map(n, hf, equal, alloc) {
     for (; first != last; ++first) {
@@ -161,8 +157,7 @@ public:
   cuckoohash_map(const cuckoohash_map &other, const Allocator &alloc)
       : hash_fn_(other.hash_fn_), eq_fn_(other.eq_fn_),
         buckets_(other.buckets_, alloc),
-        old_buckets_(other.old_buckets_, alloc),
-        all_locks_(alloc),
+        old_buckets_(other.old_buckets_, alloc), all_locks_(alloc),
         num_remaining_lazy_rehash_locks_(
             other.num_remaining_lazy_rehash_locks_),
         minimum_load_factor_(other.minimum_load_factor_),
@@ -193,8 +188,7 @@ public:
   cuckoohash_map(cuckoohash_map &&other, const Allocator &alloc)
       : hash_fn_(std::move(other.hash_fn_)), eq_fn_(std::move(other.eq_fn_)),
         buckets_(std::move(other.buckets_), alloc),
-        old_buckets_(std::move(other.old_buckets_), alloc),
-        all_locks_(alloc),
+        old_buckets_(std::move(other.old_buckets_), alloc), all_locks_(alloc),
         num_remaining_lazy_rehash_locks_(
             other.num_remaining_lazy_rehash_locks_),
         minimum_load_factor_(other.minimum_load_factor_),
@@ -422,7 +416,6 @@ public:
     return maximum_hashpower_.load(std::memory_order_acquire);
   }
 
-
   /**
    * Set the maximum number of extra worker threads the table can spawn when
    * doing large batch operations. Currently batch operations occur in the
@@ -549,9 +542,27 @@ public:
    * the table
    */
   template <typename K, typename F, typename... Args>
-  bool uprase_fn(K &&key, F fn, Args &&... val) {
+  bool uprase_fn(K &&key, F fn, Args &&...val) {
     hash_value hv = hashed_key(key);
     auto b = snapshot_and_lock_two<normal_mode>(hv);
+    table_position pos = cuckoo_insert_loop<normal_mode>(hv, b, key);
+    if (pos.status == ok) {
+      add_to_bucket(pos.index, pos.slot, hv.partial, std::forward<K>(key),
+                    std::forward<Args>(val)...);
+    } else {
+      if (fn(buckets_[pos.index].mapped(pos.slot))) {
+        del_from_bucket(pos.index, pos.slot);
+      }
+    }
+    return pos.status == ok;
+  }
+
+  template <typename K, typename F, typename... Args>
+  bool try_uprase_fn(K &&key, F fn, Args &&...val) {
+    hash_value hv = hashed_key(key);
+    auto [success, b] = try_snapshot_and_lock_two<normal_mode>(hv);
+    if (!success)
+      return false;
     table_position pos = cuckoo_insert_loop<normal_mode>(hv, b, key);
     if (pos.status == ok) {
       add_to_bucket(pos.index, pos.slot, hv.partial, std::forward<K>(key),
@@ -571,13 +582,25 @@ public:
    * operator()(mapped_type&)</tt>.
    */
   template <typename K, typename F, typename... Args>
-  bool upsert(K &&key, F fn, Args &&... val) {
-    return uprase_fn(std::forward<K>(key),
-                     [&fn](mapped_type &v) {
-                       fn(v);
-                       return false;
-                     },
-                     std::forward<Args>(val)...);
+  bool upsert(K &&key, F fn, Args &&...val) {
+    return uprase_fn(
+        std::forward<K>(key),
+        [&fn](mapped_type &v) {
+          fn(v);
+          return false;
+        },
+        std::forward<Args>(val)...);
+  }
+
+  template <typename K, typename F, typename... Args>
+  bool try_upsert(K &&key, F fn, Args &&...val) {
+    return try_uprase_fn(
+        std::forward<K>(key),
+        [&fn](mapped_type &v) {
+          fn(v);
+          return false;
+        },
+        std::forward<Args>(val)...);
   }
 
   /**
@@ -630,9 +653,9 @@ public:
    * Inserts the key-value pair into the table. Equivalent to calling @ref
    * upsert with a functor that does nothing.
    */
-  template <typename K, typename... Args> bool insert(K &&key, Args &&... val) {
-    return upsert(std::forward<K>(key), [](mapped_type &) {},
-                  std::forward<Args>(val)...);
+  template <typename K, typename... Args> bool insert(K &&key, Args &&...val) {
+    return upsert(
+        std::forward<K>(key), [](mapped_type &) {}, std::forward<Args>(val)...);
   }
 
   /**
@@ -642,8 +665,9 @@ public:
    * val.
    */
   template <typename K, typename V> bool insert_or_assign(K &&key, V &&val) {
-    return upsert(std::forward<K>(key), [&val](mapped_type &m) { m = val; },
-                  std::forward<V>(val));
+    return upsert(
+        std::forward<K>(key), [&val](mapped_type &m) { m = val; },
+        std::forward<V>(val));
   }
 
   /**
@@ -684,6 +708,9 @@ public:
     cuckoo_clear();
   }
 
+  // allows to abort insert and lookup operations when this flag is set
+  void set_global_lock(bool locked) { global_lock_.store(locked); }
+
   /**
    * Construct a @ref locked_table object that owns all the locks in the
    * table.
@@ -695,6 +722,8 @@ public:
   /**@}*/
 
 private:
+  std::atomic<bool> global_lock_{false};
+
   // Constructor helpers
 
   void add_locks_from_other(const cuckoohash_map &other) {
@@ -818,6 +847,14 @@ private:
       return *this;
     }
 
+    bool try_local_lock(const std::atomic<bool> &global_lock) noexcept {
+      while (lock_.test_and_set(std::memory_order_acq_rel)) {
+        if (global_lock)
+          return false;
+      }
+      return true;
+    }
+
     void lock() noexcept {
       while (lock_.test_and_set(std::memory_order_acq_rel))
         ;
@@ -906,6 +943,10 @@ private:
   // hashpower is not what was expected
   class hashpower_changed {};
 
+  // This exception is thrown whenever we try to lock a bucket, but the
+  // in the meantime another thread has locked the entire table.
+  class table_globally_locked {};
+
   // After taking a lock on the table for the given bucket, this function will
   // check the hashpower to make sure it is the same as what it was before the
   // lock was taken. If it isn't unlock the bucket and throw a
@@ -934,11 +975,11 @@ private:
   static constexpr bool kIsLazy = true;
   static constexpr bool kIsNotLazy = false;
 
-  template <bool IS_LAZY>
-  void rehash_lock(size_t l) const noexcept {
+  template <bool IS_LAZY> void rehash_lock(size_t l) const noexcept {
     locks_t &locks = get_current_locks();
     spinlock &lock = locks[l];
-    if (lock.is_migrated()) return;
+    if (lock.is_migrated())
+      return;
 
     assert(is_data_nothrow_move_constructible());
     assert(locks.size() == kMaxNumLocks);
@@ -995,6 +1036,28 @@ private:
     check_hashpower(hp, locks[l1]);
     if (l2 != l1) {
       locks[l2].lock();
+    }
+    rehash_lock<kIsLazy>(l1);
+    rehash_lock<kIsLazy>(l2);
+    return TwoBuckets(locks, i1, i2, normal_mode());
+  }
+
+  TwoBuckets try_lock_two(size_type hp, size_type i1, size_type i2,
+                          normal_mode) const {
+    size_type l1 = lock_ind(i1);
+    size_type l2 = lock_ind(i2);
+    if (l2 < l1) {
+      std::swap(l1, l2);
+    }
+    locks_t &locks = get_current_locks();
+    if (!locks[l1].try_local_lock(global_lock_))
+      throw table_globally_locked();
+    check_hashpower(hp, locks[l1]);
+    if (l2 != l1) {
+      if (!locks[l2].try_local_lock(global_lock_)) {
+        locks[l1].unlock();
+        throw table_globally_locked();
+      }
     }
     rehash_lock<kIsLazy>(l1);
     rehash_lock<kIsLazy>(l2);
@@ -1065,15 +1128,33 @@ private:
     }
   }
 
+  template <typename TABLE_MODE>
+  std::pair<bool, TwoBuckets>
+  try_snapshot_and_lock_two(const hash_value &hv) const {
+    while (true) {
+      // Keep the current hashpower and locks we're using to compute the buckets
+      const size_type hp = hashpower();
+      const size_type i1 = index_hash(hp, hv.hash);
+      const size_type i2 = alt_index(hp, hv.partial, i1);
+      try {
+        return {true, try_lock_two(hp, i1, i2, TABLE_MODE())};
+      } catch (hashpower_changed &) {
+        // The hashpower changed while taking the locks. Try again.
+        continue;
+      } catch (table_globally_locked &) {
+        // The hashtable was globally locked in the meantime
+        return {false, TwoBuckets()};
+      }
+    }
+  }
+
   // lock_all takes all the locks, and returns a deleter object that releases
   // the locks upon destruction. It does NOT perform any hashpower checks, or
   // rehash any un-migrated buckets.
   //
   // Note that after taking all the locks, it is okay to resize the buckets_
   // container, since no other threads should be accessing the buckets.
-  AllLocksManager lock_all(locked_table_mode) {
-    return AllLocksManager();
-  }
+  AllLocksManager lock_all(locked_table_mode) { return AllLocksManager(); }
 
   AllLocksManager lock_all(normal_mode) {
     // all_locks_ should never decrease in size, so if it is non-empty now, it
@@ -1112,6 +1193,7 @@ private:
     failure_key_duplicated,
     failure_table_full,
     failure_under_expansion,
+    failure_globally_locked,
   };
 
   // A composite type for functions that need to return a table position, and
@@ -1277,7 +1359,7 @@ private:
   // for use afterwards.
   template <typename K, typename... Args>
   void add_to_bucket(const size_type bucket_ind, const size_type slot,
-                     const partial_t partial, K &&key, Args &&... val) {
+                     const partial_t partial, K &&key, Args &&...val) {
     buckets_.setKV(bucket_ind, slot, partial, std::forward<K>(key),
                    std::forward<Args>(val)...);
     ++get_current_locks()[lock_ind(bucket_ind)].elem_counter();
@@ -1595,9 +1677,9 @@ private:
                   "SLOT_PER_BUCKET must be greater than 0.");
     static constexpr size_type MAX_CUCKOO_COUNT =
         2 * ((slot_per_bucket() == 1)
-             ? MAX_BFS_PATH_LEN
-             : (const_pow(slot_per_bucket(), MAX_BFS_PATH_LEN) - 1) /
-               (slot_per_bucket() - 1));
+                 ? MAX_BFS_PATH_LEN
+                 : (const_pow(slot_per_bucket(), MAX_BFS_PATH_LEN) - 1) /
+                       (slot_per_bucket() - 1));
     // An array of b_slots. Since we allocate just enough space to complete a
     // full search, we should never exceed the end of the array.
     b_slot slots_[MAX_CUCKOO_COUNT];
@@ -1862,8 +1944,7 @@ private:
 
     parallel_exec(
         0, hashsize(hp),
-        [this, &new_map]
-        (size_type i, size_type end, std::exception_ptr &eptr) {
+        [this, &new_map](size_type i, size_type end, std::exception_ptr &eptr) {
           try {
             for (; i < end; ++i) {
               auto &bucket = buckets_[i];
@@ -1939,7 +2020,8 @@ private:
       t.join();
     }
     for (std::exception_ptr &eptr : eptrs) {
-      if (eptr) std::rethrow_exception(eptr);
+      if (eptr)
+        std::rethrow_exception(eptr);
     }
   }
 
@@ -1947,13 +2029,12 @@ private:
   // locks have already been taken.
   void rehash_with_workers() noexcept {
     locks_t &current_locks = get_current_locks();
-    parallel_exec_noexcept(
-        0, current_locks.size(),
-        [this](size_type start, size_type end) {
-          for (size_type i = start; i < end; ++i) {
-            rehash_lock<kIsNotLazy>(i);
-          }
-        });
+    parallel_exec_noexcept(0, current_locks.size(),
+                           [this](size_type start, size_type end) {
+                             for (size_type i = start; i < end; ++i) {
+                               rehash_lock<kIsNotLazy>(i);
+                             }
+                           });
     num_remaining_lazy_rehash_locks(0);
   }
 
@@ -2021,13 +2102,11 @@ private:
   // Get/set/decrement num remaining lazy rehash locks. If we reach 0 remaining
   // lazy locks, we can deallocate the memory in old_buckets_.
   size_type num_remaining_lazy_rehash_locks() const {
-    return num_remaining_lazy_rehash_locks_.load(
-        std::memory_order_acquire);
+    return num_remaining_lazy_rehash_locks_.load(std::memory_order_acquire);
   }
 
   void num_remaining_lazy_rehash_locks(size_type n) const {
-    num_remaining_lazy_rehash_locks_.store(
-        n, std::memory_order_release);
+    num_remaining_lazy_rehash_locks_.store(n, std::memory_order_release);
     if (n == 0) {
       old_buckets_.clear_and_deallocate();
     }
@@ -2035,7 +2114,7 @@ private:
 
   void decrement_num_remaining_lazy_rehash_locks() const {
     size_type old_num_remaining = num_remaining_lazy_rehash_locks_.fetch_sub(
-      1, std::memory_order_acq_rel);
+        1, std::memory_order_acq_rel);
     assert(old_num_remaining >= 1);
     if (old_num_remaining == 1) {
       old_buckets_.clear_and_deallocate();
@@ -2081,16 +2160,16 @@ private:
   // A small wrapper around std::atomic to make it copyable for constructors.
   template <typename AtomicT>
   class CopyableAtomic : public std::atomic<AtomicT> {
-   public:
+  public:
     using std::atomic<AtomicT>::atomic;
 
-    CopyableAtomic(const CopyableAtomic& other) noexcept
+    CopyableAtomic(const CopyableAtomic &other) noexcept
         : CopyableAtomic(other.load(std::memory_order_acquire)) {}
 
-    CopyableAtomic& operator=(const CopyableAtomic& other) noexcept {
-        this->store(other.load(std::memory_order_acquire),
-                    std::memory_order_release);
-        return *this;
+    CopyableAtomic &operator=(const CopyableAtomic &other) noexcept {
+      this->store(other.load(std::memory_order_acquire),
+                  std::memory_order_release);
+      return *this;
     }
   };
 
@@ -2349,7 +2428,9 @@ public:
 
     locked_table(locked_table &&lt) noexcept
         : map_(std::move(lt.map_)),
-          all_locks_manager_(std::move(lt.all_locks_manager_)) {}
+          all_locks_manager_(std::move(lt.all_locks_manager_)) {
+      map_.get().set_global_lock(true);
+    }
 
     locked_table &operator=(locked_table &&lt) noexcept {
       unlock();
@@ -2363,7 +2444,10 @@ public:
      * invalidating all iterators and table operations with this object. It
      * is idempotent.
      */
-    void unlock() { all_locks_manager_.reset(); }
+    void unlock() {
+      all_locks_manager_.reset();
+      map_.get().set_global_lock(false);
+    }
 
     /**@}*/
 
@@ -2478,7 +2562,7 @@ public:
      * hashing and expansion.
      */
     template <typename K, typename... Args>
-    std::pair<iterator, bool> insert(K &&key, Args &&... val) {
+    std::pair<iterator, bool> insert(K &&key, Args &&...val) {
       hash_value hv = map_.get().hashed_key(key);
       auto b = map_.get().template snapshot_and_lock_two<locked_table_mode>(hv);
       table_position pos =
@@ -2668,13 +2752,12 @@ public:
     // calling it. We also complete any remaining rehashing in the table, so
     // that everything is in map.buckets_.
     locked_table(cuckoohash_map &map) noexcept
-        : map_(map),
-          all_locks_manager_(map.lock_all(normal_mode())) {
+        : map_(map), all_locks_manager_(map.lock_all(normal_mode())) {
+      map_.get().set_global_lock(true);
       map.rehash_with_workers();
     }
 
     // Dispatchers for methods on cuckoohash_map
-
     buckets_t &buckets() { return map_.get().buckets_; }
 
     const buckets_t &buckets() const { return map_.get().buckets_; }
@@ -2744,6 +2827,6 @@ void swap(
   lhs.swap(rhs);
 }
 
-}  // namespace libcuckoo
+} // namespace libcuckoo
 
 #endif // _CUCKOOHASH_MAP_HH

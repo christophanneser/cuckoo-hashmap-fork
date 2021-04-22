@@ -34,8 +34,29 @@ static uint64_t Timing(std::function<void()> fn) {
       .count();
 }
 
+using empty_t = std::tuple<>;
+
+struct Info {
+  uint version;
+};
+
 int main() {
+
+  libcuckoo::cuckoohash_map<uint64_t, Info> hashmap;
+  auto lt = hashmap.lock_table();
+  auto x = lt[12];
+  lt.erase(12);
+  lt.insert(13, x);
+
+  hashmap.try_upsert(
+      15, [](Info &info) { info.version++; }, x);
+  auto it = lt.find(15);
+  assert(it == lt.end());
+
+  exit(42);
+
   vector<uint64_t> times;
+  std::cout << sizeof(std::tuple<int>) << std::endl;
 
   for (auto threads : {16, 32}) { // 1, 2, 4, 8,
     libcuckoo::cuckoohash_map<uint64_t, uint64_t> map;
