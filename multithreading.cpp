@@ -1,19 +1,21 @@
 #include <libcuckoo/cuckoohash_map.hh>
+#include <random>
+#include <unordered_map>
 
 using namespace std;
 
 static void RunBenchmark(size_t threads_count,
                          libcuckoo::cuckoohash_map<uint64_t, uint64_t> &map,
-                         size_t num_items) {
+                         vector<uint64_t> &queries) {
   vector<thread> threads;
+  size_t num_items = queries.size();
   threads.reserve(threads_count);
   uint64_t batch_size = num_items / threads_count;
-
   auto inserts = [&](uint64_t thread_id) {
     size_t from = thread_id * batch_size;
     size_t to = min((thread_id + 1) * batch_size, num_items);
     for (; from < to; from++) {
-      size_t key = from % 10'000'000;
+      size_t key = queries[from];
       map.upsert(
           key, [](uint64_t &v) { v++; }, 1);
     }
@@ -34,40 +36,54 @@ static uint64_t Timing(std::function<void()> fn) {
       .count();
 }
 
-using empty_t = std::tuple<>;
-
 struct Info {
   uint version;
 };
 
 int main() {
 
-  libcuckoo::cuckoohash_map<uint64_t, Info> hashmap;
-  auto lt = hashmap.lock_table();
-  auto x = lt[12];
-  lt.erase(12);
-  lt.insert(13, x);
-
-  hashmap.try_upsert(
-      15, [](Info &info) { info.version++; }, x);
-  auto it = lt.find(15);
-  assert(it == lt.end());
-
-  exit(42);
+  //  libcuckoo::cuckoohash_map<uint64_t, Info> hashmap;
+  //  auto lt = hashmap.lock_table();
+  //  auto x = lt[12];
+  //  lt.erase(12);
+  //  lt.insert(13, x);
+  //
+  //  hashmap.try_upsert(
+  //      15, [](Info &info) { info.version++; }, x);
+  //  auto it = lt.find(15);
+  //  assert(it == lt.end());
+  //
+  //  exit(42);
 
   vector<uint64_t> times;
   std::cout << sizeof(std::tuple<int>) << std::endl;
 
-  for (auto threads : {16, 32}) { // 1, 2, 4, 8,
+  vector<uint64_t> queries(100'000'000);
+
+  std::random_device rd{};
+  std::mt19937 gen{rd()};
+  std::normal_distribution<double> dist{5'000'000, 100'000};
+
+  std::unordered_map<uint64_t, uint64_t> expected_result;
+  for (auto &query : queries) {
+    query = static_cast<size_t>(dist(gen));
+    auto it = expected_result.find(query);
+    if (it == expected_result.end())
+      expected_result.emplace(query, 1);
+    else
+      it->second++;
+  }
+
+  for (auto threads : {1, 2, 4, 8, 16, 32}) {
+    std::cout << "run benchmark with " << threads << " threads" << std::endl;
     libcuckoo::cuckoohash_map<uint64_t, uint64_t> map;
-    times.emplace_back(
-        Timing([&]() { RunBenchmark(threads, map, 100'000'000); }));
+    times.emplace_back(Timing([&]() { RunBenchmark(threads, map, queries); }));
     auto locked_table = map.lock_table();
-    assert(locked_table.size() == 10'000'000);
-    for (auto it = locked_table.begin(); it != locked_table.end(); it++) {
-      if (it->second != 10)
-        std::cerr << "wrong!" << std::endl;
-    }
+
+    assert(locked_table.size() == expected_result.size());
+    // validate resutls
+    for (auto it = locked_table.begin(); it != locked_table.end(); it++)
+      assert(it->second == expected_result.find(it->first)->second);
   }
 
   for (auto time : times)
