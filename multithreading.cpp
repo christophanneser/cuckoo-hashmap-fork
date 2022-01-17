@@ -1,6 +1,6 @@
-#include <libcuckoo/cuckoohash_map.hh>
 #include <random>
 #include <unordered_map>
+#include "libcuckoo/cuckoohash_map.hh"
 
 using namespace std;
 
@@ -41,20 +41,6 @@ struct Info {
 };
 
 int main() {
-
-  //  libcuckoo::cuckoohash_map<uint64_t, Info> hashmap;
-  //  auto lt = hashmap.lock_table();
-  //  auto x = lt[12];
-  //  lt.erase(12);
-  //  lt.insert(13, x);
-  //
-  //  hashmap.try_upsert(
-  //      15, [](Info &info) { info.version++; }, x);
-  //  auto it = lt.find(15);
-  //  assert(it == lt.end());
-  //
-  //  exit(42);
-
   vector<uint64_t> times;
   std::cout << sizeof(std::tuple<int>) << std::endl;
 
