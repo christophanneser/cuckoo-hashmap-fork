@@ -34,7 +34,7 @@ static uint64_t Timing(std::function<void()> fn) {
   const auto start = std::chrono::high_resolution_clock::now();
   fn();
   const auto end = std::chrono::high_resolution_clock::now();
-  return std::chrono::duration_cast<std::chrono::nanoseconds>(end - start)
+  return std::chrono::duration_cast<std::chrono::microseconds>(end - start)
       .count();
 }
 
@@ -42,14 +42,14 @@ struct Info {
   uint version;
 };
 
-bool operator==(const TrackingAllocator<std::pair<const uint64_t , uint64_t>>& lhs,
-                const TrackingAllocator<std::pair<const uint64_t , uint64_t>>& rhs)
-{
+bool operator==(const TrackingAllocator<std::pair<const uint64_t, uint64_t>> &lhs,
+                const TrackingAllocator<std::pair<const uint64_t, uint64_t>> &rhs) {
   return true;
 }
 
 int main() {
-  vector<uint64_t> times;
+  vector<uint64_t> times_tracked;
+  vector<uint64_t> times_untracked;
   std::cout << sizeof(std::tuple<int>) << std::endl;
 
   vector<uint64_t> queries(10'000'000);
@@ -68,7 +68,8 @@ int main() {
       it->second++;
   }
 
-  for (auto threads : {1, 2, 4, 8, 16, 32}) {
+//  for (auto threads : {1, 2, 4, 8, 16, 32}) {
+  for (auto threads = 0; threads < 32; threads++) {
     std::cout << "run benchmark with " << threads << " threads" << std::endl;
     size_t size;
     using Key = uint64_t;
@@ -86,10 +87,11 @@ int main() {
 
     libcuckoo::cuckoohash_map<Key, T> untracked_map;
 
-    times.emplace_back(Timing([&]() { RunBenchmark(threads, tracked_map, queries); }));
-    std::cout << "size: " << size << std::endl;
+    times_tracked.emplace_back(Timing([&]() { RunBenchmark(threads, tracked_map, queries); }));
+    std::cout << "capacity: " << tracked_map.capacity() << std::endl;
+    std::cout << "size: " << (size >> 20) << "MB" << std::endl;
 
-    times.emplace_back(Timing([&]() { RunBenchmark(threads, untracked_map, queries); }));
+    times_untracked.emplace_back(Timing([&]() { RunBenchmark(threads, untracked_map, queries); }));
 
     auto locked_table = tracked_map.lock_table();
 
@@ -99,6 +101,12 @@ int main() {
       assert(it->second == expected_result.find(it->first)->second);
   }
 
-  for (auto time : times)
+  // print times
+  for (auto time : times_tracked)
+    cout << time << endl;
+
+  cout << "++++++++++++++++++++++++++++++" << endl;
+
+  for (auto time : times_untracked)
     cout << time << endl;
 }
