@@ -94,8 +94,10 @@ class cuckoohash_map {
   /**@{*/
 
 
-  cuckoohash_map(size_type &tracked_size, bool t)
-      : cuckoohash_map(DEFAULT_SIZE, Hash(), KeyEqual(), Allocator(tracked_size)) {}
+  cuckoohash_map(size_type &tracked_size, size_type capacity)
+      : cuckoohash_map(capacity, Hash(), KeyEqual(), Allocator(tracked_size)) {
+    std::cerr << "INFO: passed tracking allocator for cuckoo hashmap - this is experimental!" << std::endl;
+  }
 
   /**
    * Creates a new cuckohash_map instance
