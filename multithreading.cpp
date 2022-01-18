@@ -1,11 +1,13 @@
 #include <random>
 #include <unordered_map>
+#include <tracking_allocator.h>
 #include "libcuckoo/cuckoohash_map.hh"
 
 using namespace std;
 
+template<typename ConcurrentHashMap>
 static void RunBenchmark(size_t threads_count,
-                         libcuckoo::cuckoohash_map<uint64_t, uint64_t> &map,
+                         ConcurrentHashMap &map,
                          vector<uint64_t> &queries) {
   vector<thread> threads;
   size_t num_items = queries.size();
@@ -40,11 +42,17 @@ struct Info {
   uint version;
 };
 
+bool operator==(const TrackingAllocator<std::pair<const uint64_t , uint64_t>>& lhs,
+                const TrackingAllocator<std::pair<const uint64_t , uint64_t>>& rhs)
+{
+  return true;
+}
+
 int main() {
   vector<uint64_t> times;
   std::cout << sizeof(std::tuple<int>) << std::endl;
 
-  vector<uint64_t> queries(100'000'000);
+  vector<uint64_t> queries(10'000'000);
 
   std::random_device rd{};
   std::mt19937 gen{rd()};
@@ -62,12 +70,31 @@ int main() {
 
   for (auto threads : {1, 2, 4, 8, 16, 32}) {
     std::cout << "run benchmark with " << threads << " threads" << std::endl;
-    libcuckoo::cuckoohash_map<uint64_t, uint64_t> map;
-    times.emplace_back(Timing([&]() { RunBenchmark(threads, map, queries); }));
-    auto locked_table = map.lock_table();
+    size_t size;
+    using Key = uint64_t;
+    using T = uint64_t;
+    using AllocatorType = TrackingAllocator<std::pair<const Key, T>>;
+
+    libcuckoo::cuckoohash_map<
+        Key,
+        T,
+        std::hash<Key>,
+        std::equal_to<>,
+        AllocatorType,
+        libcuckoo::DEFAULT_SLOT_PER_BUCKET>
+        tracked_map(size, false);
+
+    libcuckoo::cuckoohash_map<Key, T> untracked_map;
+
+    times.emplace_back(Timing([&]() { RunBenchmark(threads, tracked_map, queries); }));
+    std::cout << "size: " << size << std::endl;
+
+    times.emplace_back(Timing([&]() { RunBenchmark(threads, untracked_map, queries); }));
+
+    auto locked_table = tracked_map.lock_table();
 
     assert(locked_table.size() == expected_result.size());
-    // validate resutls
+    // validate results
     for (auto it = locked_table.begin(); it != locked_table.end(); it++)
       assert(it->second == expected_result.find(it->first)->second);
   }
