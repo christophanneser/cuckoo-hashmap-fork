@@ -69,7 +69,7 @@ int main() {
   }
 
 //  for (auto threads : {1, 2, 4, 8, 16, 32}) {
-  for (auto threads = 0; threads < 32; threads++) {
+  for (auto threads = 1; threads < 32; threads++) {
     std::cout << "run benchmark with " << threads << " threads" << std::endl;
     size_t size;
     using Key = uint64_t;
