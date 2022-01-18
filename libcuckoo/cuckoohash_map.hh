@@ -1759,6 +1759,7 @@ class cuckoohash_map {
                           " pair is not nothrow move constructible");
       return cuckoo_expand_simple<TABLE_MODE, AUTO_RESIZE>(current_hp + 1);
     }
+    std::cout << "[INFO] expand cuckoo table" << std::endl;
     const size_type new_hp = current_hp + 1;
     auto all_locks_manager = lock_all(TABLE_MODE());
     cuckoo_status st = check_resize_validity<AUTO_RESIZE>(current_hp, new_hp);
@@ -1939,6 +1940,7 @@ class cuckoohash_map {
   // maximum hashpower, and we have an actual limit.
   template<typename TABLE_MODE, typename AUTO_RESIZE>
   cuckoo_status cuckoo_expand_simple(size_type new_hp) {
+    std::cout << "[INFO] expand cuckoo table" << std::endl;
     auto all_locks_manager = lock_all(TABLE_MODE());
     const size_type hp = hashpower();
     cuckoo_status st = check_resize_validity<AUTO_RESIZE>(hp, new_hp);
