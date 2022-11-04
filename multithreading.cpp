@@ -2,13 +2,16 @@
 #include <unordered_map>
 #include <tracking_allocator.h>
 #include "libcuckoo/cuckoohash_map.hh"
+#include <unistd.h>
 
 using namespace std;
 
 template<typename ConcurrentHashMap>
 static void RunBenchmark(size_t threads_count,
                          ConcurrentHashMap &map,
-                         vector<uint64_t> &queries) {
+                         vector<uint64_t> &queries,
+                         vector<bool> &locking_indexes
+                         ) {
   vector<thread> threads;
   size_t num_items = queries.size();
   threads.reserve(threads_count);
@@ -17,6 +20,13 @@ static void RunBenchmark(size_t threads_count,
     size_t from = thread_id * batch_size;
     size_t to = min((thread_id + 1) * batch_size, num_items);
     for (; from < to; from++) {
+      if (locking_indexes[from]) {
+        auto locked_tale = map.lock_table();
+        cerr << "locked table gloablly" << endl;
+        usleep(400'000); // sleep 100 ms
+        locked_tale.unlock();
+        cerr << "unlocked table gloablly" << endl;
+      }
       size_t key = queries[from];
       map.upsert(
           key, [](uint64_t &v) { v++; }, 1);
@@ -50,9 +60,9 @@ bool operator==(const TrackingAllocator<std::pair<const uint64_t, uint64_t>> &lh
 int main() {
   vector<uint64_t> times_tracked;
   vector<uint64_t> times_untracked;
-  std::cout << sizeof(std::tuple<int>) << std::endl;
 
   vector<uint64_t> queries(10'000'000);
+  vector<bool> lockings(10'000'000, false);
 
   std::random_device rd{};
   std::mt19937 gen{rd()};
@@ -68,13 +78,19 @@ int main() {
       it->second++;
   }
 
-//  for (auto threads : {1, 2, 4, 8, 16, 32}) {
-  for (auto threads = 1; threads < 32; threads++) {
+  for (auto i = 0; i < 100; i++) {
+    uint64_t rand  = static_cast<size_t>(dist(gen));
+    lockings[rand % lockings.size()] = false;
+  }
+
+  using Key = uint64_t;
+  using T = uint64_t;
+  using AllocatorType = TrackingAllocator<std::pair<const Key, T>>;
+
+  for (auto threads : {12}) {
+//  for (auto threads = 1; threads < 32; threads++) {
     std::cout << "run benchmark with " << threads << " threads" << std::endl;
     size_t size;
-    using Key = uint64_t;
-    using T = uint64_t;
-    using AllocatorType = TrackingAllocator<std::pair<const Key, T>>;
 
     libcuckoo::cuckoohash_map<
         Key,
@@ -83,17 +99,17 @@ int main() {
         std::equal_to<>,
         AllocatorType,
         libcuckoo::DEFAULT_SLOT_PER_BUCKET>
-        tracked_map(size, false);
+        tracked_map(size, (1u << 20) * 4);
 
     libcuckoo::cuckoohash_map<Key, T> untracked_map;
 
-    times_tracked.emplace_back(Timing([&]() { RunBenchmark(threads, tracked_map, queries); }));
+    times_tracked.emplace_back(Timing([&]() { RunBenchmark(threads, tracked_map, queries, lockings); }));
     std::cout << "capacity: " << tracked_map.capacity() << std::endl;
     std::cout << "size: " << (size >> 20) << "MB" << std::endl;
 
-    times_untracked.emplace_back(Timing([&]() { RunBenchmark(threads, untracked_map, queries); }));
+    times_untracked.emplace_back(Timing([&]() { RunBenchmark(threads, untracked_map, queries, lockings); }));
 
-    auto locked_table = tracked_map.lock_table();
+    auto locked_table = untracked_map.lock_table();
 
     assert(locked_table.size() == expected_result.size());
     // validate results
